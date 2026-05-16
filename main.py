@@ -1,25 +1,47 @@
 import cv2
+import time
+
 from src.pose_detector import PoseDetector
 
 
 def main():
 
-    # Webcam
+    # ==========================
+    # INITIALIZE WEBCAM
+    # ==========================
+
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
-        print("Error: Cannot access webcam")
+        print("Cannot access webcam")
         return
+
+    # ==========================
+    # INITIALIZE DETECTOR
+    # ==========================
 
     detector = PoseDetector()
 
+    # ==========================
+    # AUTO CAPTURE VARIABLES
+    # ==========================
+
+    valid_start_time = None
+
+    capture_delay = 3
+
     captured = False
+
     frozen_result = None
+
+    # ==========================
+    # MAIN LOOP
+    # ==========================
 
     while True:
 
         # ==========================
-        # LIVE PREVIEW MODE
+        # LIVE MODE
         # ==========================
 
         if not captured:
@@ -32,27 +54,81 @@ def main():
             # Mirror view
             frame = cv2.flip(frame, 1)
 
-            # Instructions
-            cv2.putText(
-                frame,
-                "Press SPACE to Capture",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2
-            )
+            # Detect pose
+            result = detector.detect_pose(frame)
 
-            cv2.imshow("PoseGuide", frame)
+            output_frame = result["frame"]
+
+            # ==========================
+            # VALID POSE DETECTED
+            # ==========================
+
+            if result["valid_pose"]:
+
+                # Start timer
+                if valid_start_time is None:
+                    valid_start_time = time.time()
+
+                elapsed_time = time.time() - valid_start_time
+
+                remaining_time = max(
+                    0,
+                    int(capture_delay - elapsed_time) + 1
+                )
+
+                # Countdown display
+                cv2.putText(
+                    output_frame,
+                    f"Capturing in {remaining_time}",
+                    (20, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    3
+                )
+
+                # AUTO CAPTURE
+                if elapsed_time >= capture_delay:
+
+                    frozen_result = result
+
+                    captured = True
+
+            # ==========================
+            # INVALID POSE
+            # ==========================
+
+            else:
+
+                valid_start_time = None
+
+            # Show live frame
+            cv2.imshow("PoseGuide", output_frame)
 
         # ==========================
-        # FROZEN ANALYSIS MODE
+        # CAPTURED MODE
         # ==========================
 
         else:
 
-            cv2.imshow("PoseGuide", frozen_result["frame"])
-            cv2.imshow("Segmentation Mask", frozen_result["mask"])
+            frozen_frame = frozen_result["frame"]
+
+            cv2.putText(
+                frozen_frame,
+                "CAPTURED",
+                (20, 90),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255),
+                3
+            )
+
+            cv2.imshow("PoseGuide", frozen_frame)
+
+            cv2.imshow(
+                "Segmentation Mask",
+                frozen_result["mask"]
+            )
 
         # ==========================
         # KEYBOARD CONTROLS
@@ -60,31 +136,25 @@ def main():
 
         key = cv2.waitKey(1)
 
-        # SPACE → Capture
-        if key == 32 and not captured:
-
-            result = detector.detect_pose(frame)
-
-            frozen_result = result
-
-            captured = True
-
-            print("\n===== LANDMARKS =====")
-
-            for name, coords in result["landmarks"].items():
-                print(f"{name}: {coords}")
-
         # R → Reset
-        elif key == ord('r'):
+        if key == ord('r'):
 
             captured = False
+
             frozen_result = None
+
+            valid_start_time = None
 
         # Q → Quit
         elif key == ord('q'):
             break
 
+    # ==========================
+    # CLEANUP
+    # ==========================
+
     cap.release()
+
     cv2.destroyAllWindows()
 
 

@@ -1,22 +1,25 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import math
 
 
 class PoseDetector:
 
     def __init__(self):
 
-        # MediaPipe Pose
+        # ==========================
+        # MEDIAPIPE MODULES
+        # ==========================
+
         self.mp_pose = mp.solutions.pose
-
-        # MediaPipe Drawing
         self.mp_drawing = mp.solutions.drawing_utils
-
-        # MediaPipe Selfie Segmentation
         self.mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
-        # Pose Model
+        # ==========================
+        # POSE MODEL
+        # ==========================
+
         self.pose = self.mp_pose.Pose(
             static_image_mode=False,
             model_complexity=1,
@@ -24,12 +27,18 @@ class PoseDetector:
             min_tracking_confidence=0.5
         )
 
-        # Segmentation Model
+        # ==========================
+        # SEGMENTATION MODEL
+        # ==========================
+
         self.selfie_segmentation = self.mp_selfie_segmentation.SelfieSegmentation(
             model_selection=1
         )
 
-        # Important landmarks
+        # ==========================
+        # IMPORTANT LANDMARKS
+        # ==========================
+
         self.landmark_ids = {
             "LEFT_SHOULDER": 11,
             "RIGHT_SHOULDER": 12,
@@ -39,24 +48,135 @@ class PoseDetector:
             "RIGHT_ANKLE": 28
         }
 
+        # ==========================
+        # STABILITY TRACKING
+        # ==========================
+
+        self.previous_center = None
+
+    # ==========================================
+    # DISTANCE FUNCTION
+    # ==========================================
+
+    def calculate_distance(self, p1, p2):
+
+        return math.sqrt(
+            (p1[0] - p2[0]) ** 2 +
+            (p1[1] - p2[1]) ** 2
+        )
+
+    # ==========================================
+    # POSE VALIDATION
+    # ==========================================
+
+    def is_valid_pose(self, landmarks):
+
+        required = [
+            "LEFT_SHOULDER",
+            "RIGHT_SHOULDER",
+            "LEFT_HIP",
+            "RIGHT_HIP",
+            "LEFT_ANKLE",
+            "RIGHT_ANKLE"
+        ]
+
+        # ==========================
+        # CHECK ALL LANDMARKS EXIST
+        # ==========================
+
+        for point in required:
+
+            if point not in landmarks:
+                return False, "Full body not detected"
+
+            if landmarks[point]["visibility"] < 0.7:
+                return False, "Body not clearly visible"
+
+        # ==========================
+        # SHOULDER ALIGNMENT
+        # ==========================
+
+        left_shoulder_y = landmarks["LEFT_SHOULDER"]["y"]
+        right_shoulder_y = landmarks["RIGHT_SHOULDER"]["y"]
+
+        shoulder_diff = abs(left_shoulder_y - right_shoulder_y)
+
+        if shoulder_diff > 30:
+            return False, "Stand straight"
+
+        # ==========================
+        # HIP ALIGNMENT
+        # ==========================
+
+        left_hip_y = landmarks["LEFT_HIP"]["y"]
+        right_hip_y = landmarks["RIGHT_HIP"]["y"]
+
+        hip_diff = abs(left_hip_y - right_hip_y)
+
+        if hip_diff > 35:
+            return False, "Face camera properly"
+
+        # ==========================
+        # BODY STABILITY
+        # ==========================
+
+        shoulder_center = (
+            (
+                landmarks["LEFT_SHOULDER"]["x"] +
+                landmarks["RIGHT_SHOULDER"]["x"]
+            ) // 2,
+
+            (
+                landmarks["LEFT_SHOULDER"]["y"] +
+                landmarks["RIGHT_SHOULDER"]["y"]
+            ) // 2
+        )
+
+        if self.previous_center is not None:
+
+            movement = self.calculate_distance(
+                shoulder_center,
+                self.previous_center
+            )
+
+            if movement > 20:
+                self.previous_center = shoulder_center
+                return False, "Stay still"
+
+        self.previous_center = shoulder_center
+
+        return True, "Perfect"
+
+    # ==========================================
+    # MAIN DETECTION FUNCTION
+    # ==========================================
+
     def detect_pose(self, frame):
 
-        # Create copy
         output_frame = frame.copy()
 
-        # Convert BGR → RGB
+        # ==========================
+        # RGB CONVERSION
+        # ==========================
+
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Process pose detection
+        # ==========================
+        # POSE DETECTION
+        # ==========================
+
         pose_results = self.pose.process(rgb_frame)
 
-        # Process segmentation
+        # ==========================
+        # SEGMENTATION
+        # ==========================
+
         segmentation_results = self.selfie_segmentation.process(rgb_frame)
 
-        # Landmark dictionary
-        landmarks = {}
+        # ==========================
+        # IMAGE DIMENSIONS
+        # ==========================
 
-        # Get image dimensions
         height, width, _ = frame.shape
 
         # ==========================
@@ -65,7 +185,6 @@ class PoseDetector:
 
         segmentation_mask = segmentation_results.segmentation_mask
 
-        # Convert probability mask to binary mask
         condition = segmentation_mask > 0.5
 
         binary_mask = np.zeros((height, width), dtype=np.uint8)
@@ -73,31 +192,37 @@ class PoseDetector:
         binary_mask[condition] = 255
 
         # ==========================
-        # POSE LANDMARKS
+        # LANDMARK STORAGE
+        # ==========================
+
+        landmarks = {}
+
+        # ==========================
+        # EXTRACT LANDMARKS
         # ==========================
 
         if pose_results.pose_landmarks:
 
-            # Draw skeleton
             self.mp_drawing.draw_landmarks(
                 output_frame,
                 pose_results.pose_landmarks,
                 self.mp_pose.POSE_CONNECTIONS
             )
 
-            # Extract selected landmarks
             for name, idx in self.landmark_ids.items():
 
                 landmark = pose_results.pose_landmarks.landmark[idx]
 
-                # Convert normalized → pixel coordinates
                 x = int(landmark.x * width)
                 y = int(landmark.y * height)
 
-                # Store coordinates
-                landmarks[name] = (x, y)
+                landmarks[name] = {
+                    "x": x,
+                    "y": y,
+                    "visibility": landmark.visibility
+                }
 
-                # Draw landmark point
+                # Draw point
                 cv2.circle(output_frame, (x, y), 6, (0, 255, 0), -1)
 
                 # Draw label
@@ -111,8 +236,36 @@ class PoseDetector:
                     1
                 )
 
+        # ==========================
+        # VALIDATE POSE
+        # ==========================
+
+        valid_pose = False
+        validation_message = "No body detected"
+
+        if landmarks:
+            valid_pose, validation_message = self.is_valid_pose(landmarks)
+
+        # ==========================
+        # VALIDATION STATUS DISPLAY
+        # ==========================
+
+        color = (0, 255, 0) if valid_pose else (0, 0, 255)
+
+        cv2.putText(
+            output_frame,
+            validation_message,
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            color,
+            2
+        )
+
         return {
             "frame": output_frame,
             "mask": binary_mask,
-            "landmarks": landmarks
+            "landmarks": landmarks,
+            "valid_pose": valid_pose,
+            "message": validation_message
         }
