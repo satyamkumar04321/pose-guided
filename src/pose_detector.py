@@ -4,268 +4,244 @@ import numpy as np
 import math
 
 
-class PoseDetector:
+def detect_pose(self, frame):
 
-    def __init__(self):
+    output_frame = frame.copy()
 
-        # ==========================
-        # MEDIAPIPE MODULES
-        # ==========================
+    # ==========================
+    # RGB CONVERSION
+    # ==========================
 
-        self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_selfie_segmentation = mp.solutions.selfie_segmentation
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # ==========================
-        # POSE MODEL
-        # ==========================
+    # ==========================
+    # POSE DETECTION
+    # ==========================
 
-        self.pose = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+    pose_results = self.pose.process(rgb_frame)
+
+    # ==========================
+    # SEGMENTATION
+    # ==========================
+
+    segmentation_results = self.selfie_segmentation.process(rgb_frame)
+
+    # ==========================
+    # IMAGE DIMENSIONS
+    # ==========================
+
+    height, width, _ = frame.shape
+
+    # ==========================
+    # SEGMENTATION MASK
+    # ==========================
+
+    segmentation_mask = segmentation_results.segmentation_mask
+
+    condition = segmentation_mask > 0.5
+
+    binary_mask = np.zeros((height, width), dtype=np.uint8)
+
+    binary_mask[condition] = 255
+
+    # ==========================
+    # LANDMARK STORAGE
+    # ==========================
+
+    landmarks = {}
+
+    # ==========================
+    # WIDTH VARIABLES
+    # ==========================
+
+    shoulder_width = None
+    waist_width = None
+    body_ratio = None
+
+    # ==========================
+    # EXTRACT LANDMARKS
+    # ==========================
+
+    if pose_results.pose_landmarks:
+
+        self.mp_drawing.draw_landmarks(
+            output_frame,
+            pose_results.pose_landmarks,
+            self.mp_pose.POSE_CONNECTIONS
         )
 
-        # ==========================
-        # SEGMENTATION MODEL
-        # ==========================
+        for name, idx in self.landmark_ids.items():
 
-        self.selfie_segmentation = self.mp_selfie_segmentation.SelfieSegmentation(
-            model_selection=1
-        )
+            landmark = pose_results.pose_landmarks.landmark[idx]
 
-        # ==========================
-        # IMPORTANT LANDMARKS
-        # ==========================
+            x = int(landmark.x * width)
+            y = int(landmark.y * height)
 
-        self.landmark_ids = {
-            "LEFT_SHOULDER": 11,
-            "RIGHT_SHOULDER": 12,
-            "LEFT_HIP": 23,
-            "RIGHT_HIP": 24,
-            "LEFT_ANKLE": 27,
-            "RIGHT_ANKLE": 28
-        }
+            landmarks[name] = {
+                "x": x,
+                "y": y,
+                "visibility": landmark.visibility
+            }
 
-        # ==========================
-        # STABILITY TRACKING
-        # ==========================
+            # Draw landmark point
+            cv2.circle(output_frame, (x, y), 6, (0, 255, 0), -1)
 
-        self.previous_center = None
+    # ==========================
+    # VALIDATE POSE
+    # ==========================
 
-    # ==========================================
-    # DISTANCE FUNCTION
-    # ==========================================
+    valid_pose = False
+    validation_message = "No body detected"
 
-    def calculate_distance(self, p1, p2):
+    if landmarks:
+        valid_pose, validation_message = self.is_valid_pose(landmarks)
 
-        return math.sqrt(
-            (p1[0] - p2[0]) ** 2 +
-            (p1[1] - p2[1]) ** 2
-        )
+    # ==========================
+    # WIDTH EXTRACTION
+    # ==========================
 
-    # ==========================================
-    # POSE VALIDATION
-    # ==========================================
+    if valid_pose:
 
-    def is_valid_pose(self, landmarks):
-
-        required = [
-            "LEFT_SHOULDER",
-            "RIGHT_SHOULDER",
-            "LEFT_HIP",
-            "RIGHT_HIP",
-            "LEFT_ANKLE",
-            "RIGHT_ANKLE"
-        ]
-
-        # ==========================
-        # CHECK ALL LANDMARKS EXIST
-        # ==========================
-
-        for point in required:
-
-            if point not in landmarks:
-                return False, "Full body not detected"
-
-            if landmarks[point]["visibility"] < 0.7:
-                return False, "Body not clearly visible"
-
-        # ==========================
-        # SHOULDER ALIGNMENT
-        # ==========================
+        # --------------------------
+        # SHOULDER Y
+        # --------------------------
 
         left_shoulder_y = landmarks["LEFT_SHOULDER"]["y"]
         right_shoulder_y = landmarks["RIGHT_SHOULDER"]["y"]
 
-        shoulder_diff = abs(left_shoulder_y - right_shoulder_y)
+        shoulder_y = int(
+            (left_shoulder_y + right_shoulder_y) / 2
+        )
 
-        if shoulder_diff > 30:
-            return False, "Stand straight"
+        # Move slightly downward
+        shoulder_y += 20
 
-        # ==========================
-        # HIP ALIGNMENT
-        # ==========================
+        # --------------------------
+        # HIP Y
+        # --------------------------
 
         left_hip_y = landmarks["LEFT_HIP"]["y"]
         right_hip_y = landmarks["RIGHT_HIP"]["y"]
 
-        hip_diff = abs(left_hip_y - right_hip_y)
-
-        if hip_diff > 35:
-            return False, "Face camera properly"
-
-        # ==========================
-        # BODY STABILITY
-        # ==========================
-
-        shoulder_center = (
-            (
-                landmarks["LEFT_SHOULDER"]["x"] +
-                landmarks["RIGHT_SHOULDER"]["x"]
-            ) // 2,
-
-            (
-                landmarks["LEFT_SHOULDER"]["y"] +
-                landmarks["RIGHT_SHOULDER"]["y"]
-            ) // 2
+        hip_y = int(
+            (left_hip_y + right_hip_y) / 2
         )
 
-        if self.previous_center is not None:
+        # --------------------------
+        # WAIST Y
+        # --------------------------
 
-            movement = self.calculate_distance(
-                shoulder_center,
-                self.previous_center
-            )
-
-            if movement > 20:
-                self.previous_center = shoulder_center
-                return False, "Stay still"
-
-        self.previous_center = shoulder_center
-
-        return True, "Perfect"
-
-    # ==========================================
-    # MAIN DETECTION FUNCTION
-    # ==========================================
-
-    def detect_pose(self, frame):
-
-        output_frame = frame.copy()
+        waist_y = int(
+            (shoulder_y + hip_y) / 2
+        )
 
         # ==========================
-        # RGB CONVERSION
+        # SHOULDER WIDTH
         # ==========================
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        s_left, s_right, shoulder_width = self.get_body_width(
+            binary_mask,
+            shoulder_y
+        )
 
         # ==========================
-        # POSE DETECTION
+        # WAIST WIDTH
         # ==========================
 
-        pose_results = self.pose.process(rgb_frame)
+        w_left, w_right, waist_width = self.get_body_width(
+            binary_mask,
+            waist_y
+        )
 
         # ==========================
-        # SEGMENTATION
+        # DRAW SHOULDER LINE
         # ==========================
 
-        segmentation_results = self.selfie_segmentation.process(rgb_frame)
+        if shoulder_width is not None:
 
-        # ==========================
-        # IMAGE DIMENSIONS
-        # ==========================
-
-        height, width, _ = frame.shape
-
-        # ==========================
-        # SEGMENTATION MASK
-        # ==========================
-
-        segmentation_mask = segmentation_results.segmentation_mask
-
-        condition = segmentation_mask > 0.5
-
-        binary_mask = np.zeros((height, width), dtype=np.uint8)
-
-        binary_mask[condition] = 255
-
-        # ==========================
-        # LANDMARK STORAGE
-        # ==========================
-
-        landmarks = {}
-
-        # ==========================
-        # EXTRACT LANDMARKS
-        # ==========================
-
-        if pose_results.pose_landmarks:
-
-            self.mp_drawing.draw_landmarks(
+            cv2.line(
                 output_frame,
-                pose_results.pose_landmarks,
-                self.mp_pose.POSE_CONNECTIONS
+                (s_left, shoulder_y),
+                (s_right, shoulder_y),
+                (0, 255, 255),
+                3
             )
 
-            for name, idx in self.landmark_ids.items():
-
-                landmark = pose_results.pose_landmarks.landmark[idx]
-
-                x = int(landmark.x * width)
-                y = int(landmark.y * height)
-
-                landmarks[name] = {
-                    "x": x,
-                    "y": y,
-                    "visibility": landmark.visibility
-                }
-
-                # Draw point
-                cv2.circle(output_frame, (x, y), 6, (0, 255, 0), -1)
-
-                # Draw label
-                cv2.putText(
-                    output_frame,
-                    name,
-                    (x + 10, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    1
-                )
+            cv2.putText(
+                output_frame,
+                f"Shoulder: {shoulder_width}",
+                (20, 140),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 255),
+                2
+            )
 
         # ==========================
-        # VALIDATE POSE
+        # DRAW WAIST LINE
         # ==========================
 
-        valid_pose = False
-        validation_message = "No body detected"
+        if waist_width is not None:
 
-        if landmarks:
-            valid_pose, validation_message = self.is_valid_pose(landmarks)
+            cv2.line(
+                output_frame,
+                (w_left, waist_y),
+                (w_right, waist_y),
+                (255, 0, 255),
+                3
+            )
+
+            cv2.putText(
+                output_frame,
+                f"Waist: {waist_width}",
+                (20, 180),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 0, 255),
+                2
+            )
 
         # ==========================
-        # VALIDATION STATUS DISPLAY
+        # BODY RATIO
         # ==========================
 
-        color = (0, 255, 0) if valid_pose else (0, 0, 255)
+        if shoulder_width and waist_width:
 
-        cv2.putText(
-            output_frame,
-            validation_message,
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            color,
-            2
-        )
+            body_ratio = shoulder_width / waist_width
 
-        return {
-            "frame": output_frame,
-            "mask": binary_mask,
-            "landmarks": landmarks,
-            "valid_pose": valid_pose,
-            "message": validation_message
-        }
+            cv2.putText(
+                output_frame,
+                f"Ratio: {body_ratio:.2f}",
+                (20, 220),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                3
+            )
+
+    # ==========================
+    # VALIDATION STATUS DISPLAY
+    # ==========================
+
+    color = (0, 255, 0) if valid_pose else (0, 0, 255)
+
+    cv2.putText(
+        output_frame,
+        validation_message,
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        color,
+        2
+    )
+
+    return {
+        "frame": output_frame,
+        "mask": binary_mask,
+        "landmarks": landmarks,
+        "valid_pose": valid_pose,
+        "message": validation_message,
+        "shoulder_width": shoulder_width,
+        "waist_width": waist_width,
+        "body_ratio": body_ratio
+    }
