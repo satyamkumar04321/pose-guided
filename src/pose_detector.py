@@ -69,33 +69,38 @@ class PoseDetector:
     # WIDTH EXTRACTION FUNCTION
     # ==========================================
 
-    def get_body_width(self, mask, y):
+    def get_body_width(self, mask, y, center_x):
 
-        # Prevent invalid indexing
-        if y < 0 or y >= mask.shape[0]:
+        height, width = mask.shape
+
+        # Safety check
+        if y < 0 or y >= height:
             return None, None, None
 
-        # Get row pixels
         row = mask[y]
 
-        # Find white pixels
-        white_pixels = np.where(row == 255)[0]
+        # ==========================
+        # SCAN LEFT
+        # ==========================
 
-        # No body detected
-        if len(white_pixels) == 0:
-            return None, None, None
+        left_x = center_x
 
-        # Left boundary
-        left_x = white_pixels[0]
+        while left_x > 0 and row[left_x] == 255:
+            left_x -= 1
 
-        # Right boundary
-        right_x = white_pixels[-1]
+        # ==========================
+        # SCAN RIGHT
+        # ==========================
+
+        right_x = center_x
+
+        while right_x < width - 1 and row[right_x] == 255:
+            right_x += 1
 
         # Width
-        width = right_x - left_x
+        body_width = right_x - left_x
 
-        return left_x, right_x, width
-
+        return left_x, right_x, body_width
     # ==========================================
     # POSE VALIDATION
     # ==========================================
@@ -348,9 +353,17 @@ class PoseDetector:
             # SHOULDER WIDTH
             # ==========================
 
+            center_x = int(
+                (
+                    landmarks["LEFT_SHOULDER"]["x"] +
+                    landmarks["RIGHT_SHOULDER"]["x"]
+                ) / 2
+            )
+
             s_left, s_right, shoulder_width = self.get_body_width(
                 binary_mask,
-                shoulder_y
+                shoulder_y,
+                center_x
             )
 
             # ==========================
@@ -359,9 +372,9 @@ class PoseDetector:
 
             w_left, w_right, waist_width = self.get_body_width(
                 binary_mask,
-                waist_y
+                waist_y,
+                center_x
             )
-
             # ==========================
             # DRAW SHOULDER LINE
             # ==========================
