@@ -8,17 +8,17 @@ class PoseDetector:
 
     def __init__(self):
 
-        # ==========================
+        # =====================================
         # MEDIAPIPE MODULES
-        # ==========================
+        # =====================================
 
         self.mp_pose = mp.solutions.pose
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
-        # ==========================
+        # =====================================
         # POSE MODEL
-        # ==========================
+        # =====================================
 
         self.pose = self.mp_pose.Pose(
             static_image_mode=False,
@@ -27,17 +27,19 @@ class PoseDetector:
             min_tracking_confidence=0.5
         )
 
-        # ==========================
+        # =====================================
         # SEGMENTATION MODEL
-        # ==========================
+        # =====================================
 
-        self.selfie_segmentation = self.mp_selfie_segmentation.SelfieSegmentation(
-            model_selection=1
+        self.selfie_segmentation = (
+            self.mp_selfie_segmentation.SelfieSegmentation(
+                model_selection=1
+            )
         )
 
-        # ==========================
+        # =====================================
         # IMPORTANT LANDMARKS
-        # ==========================
+        # =====================================
 
         self.landmark_ids = {
             "LEFT_SHOULDER": 11,
@@ -48,15 +50,27 @@ class PoseDetector:
             "RIGHT_ANKLE": 28
         }
 
-        # ==========================
+        # =====================================
+        # BODY TYPE PROTOTYPES
+        # =====================================
+
+        self.body_profiles = {
+            "Oval": 0.70,
+            "Triangle": 0.85,
+            "Rectangle": 1.00,
+            "Trapezium": 1.12,
+            "Inverted Triangle": 1.30
+        }
+
+        # =====================================
         # STABILITY TRACKING
-        # ==========================
+        # =====================================
 
         self.previous_center = None
 
-    # ==========================================
+    # =====================================
     # DISTANCE FUNCTION
-    # ==========================================
+    # =====================================
 
     def calculate_distance(self, p1, p2):
 
@@ -65,19 +79,26 @@ class PoseDetector:
             (p1[1] - p2[1]) ** 2
         )
 
-    # ==========================================
-    # WIDTH EXTRACTION FUNCTION
-    # ==========================================
+    # =====================================
+    # BODY WIDTH EXTRACTION
+    # =====================================
 
     def get_body_width(self, mask, y, center_x):
 
         height, width = mask.shape
 
-        # Safety check
+        # Safety checks
         if y < 0 or y >= height:
             return None, None, None
 
+        if center_x < 0 or center_x >= width:
+            return None, None, None
+
         row = mask[y]
+
+        # Center must belong to body
+        if row[center_x] != 255:
+            return None, None, None
 
         # ==========================
         # SCAN LEFT
@@ -97,13 +118,42 @@ class PoseDetector:
         while right_x < width - 1 and row[right_x] == 255:
             right_x += 1
 
-        # Width
         body_width = right_x - left_x
 
         return left_x, right_x, body_width
-    # ==========================================
+
+    # =====================================
+    # BODY CLASSIFICATION
+    # =====================================
+
+    def classify_body_type(self, body_ratio):
+
+        if body_ratio is None:
+            return "Unknown", 0
+
+        closest_type = None
+
+        smallest_distance = float("inf")
+
+        for body_type, ideal_ratio in self.body_profiles.items():
+
+            distance = abs(body_ratio - ideal_ratio)
+
+            if distance < smallest_distance:
+
+                smallest_distance = distance
+                closest_type = body_type
+
+        confidence = max(
+            0,
+            round((1 - smallest_distance) * 100)
+        )
+
+        return closest_type, confidence
+
+    # =====================================
     # POSE VALIDATION
-    # ==========================================
+    # =====================================
 
     def is_valid_pose(self, landmarks):
 
@@ -116,10 +166,6 @@ class PoseDetector:
             "RIGHT_ANKLE"
         ]
 
-        # ==========================
-        # CHECK LANDMARK VISIBILITY
-        # ==========================
-
         for point in required:
 
             if point not in landmarks:
@@ -128,37 +174,33 @@ class PoseDetector:
             if landmarks[point]["visibility"] < 0.7:
                 return False, "Body not clearly visible"
 
-        # ==========================
+        # =====================================
         # SHOULDER ALIGNMENT
-        # ==========================
-
-        left_shoulder_y = landmarks["LEFT_SHOULDER"]["y"]
-        right_shoulder_y = landmarks["RIGHT_SHOULDER"]["y"]
+        # =====================================
 
         shoulder_diff = abs(
-            left_shoulder_y - right_shoulder_y
+            landmarks["LEFT_SHOULDER"]["y"] -
+            landmarks["RIGHT_SHOULDER"]["y"]
         )
 
         if shoulder_diff > 30:
             return False, "Stand straight"
 
-        # ==========================
+        # =====================================
         # HIP ALIGNMENT
-        # ==========================
-
-        left_hip_y = landmarks["LEFT_HIP"]["y"]
-        right_hip_y = landmarks["RIGHT_HIP"]["y"]
+        # =====================================
 
         hip_diff = abs(
-            left_hip_y - right_hip_y
+            landmarks["LEFT_HIP"]["y"] -
+            landmarks["RIGHT_HIP"]["y"]
         )
 
         if hip_diff > 35:
             return False, "Face camera properly"
 
-        # ==========================
-        # BODY STABILITY
-        # ==========================
+        # =====================================
+        # STABILITY CHECK
+        # =====================================
 
         shoulder_center = (
             (
@@ -189,48 +231,42 @@ class PoseDetector:
 
         return True, "Perfect"
 
-    # ==========================================
+    # =====================================
     # MAIN DETECTION FUNCTION
-    # ==========================================
+    # =====================================
 
     def detect_pose(self, frame):
 
         output_frame = frame.copy()
-
-        # ==========================
-        # RGB CONVERSION
-        # ==========================
 
         rgb_frame = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2RGB
         )
 
-        # ==========================
+        # =====================================
         # POSE DETECTION
-        # ==========================
+        # =====================================
 
         pose_results = self.pose.process(rgb_frame)
 
-        # ==========================
+        # =====================================
         # SEGMENTATION
-        # ==========================
+        # =====================================
 
-        segmentation_results = self.selfie_segmentation.process(
-            rgb_frame
+        segmentation_results = (
+            self.selfie_segmentation.process(rgb_frame)
         )
-
-        # ==========================
-        # IMAGE DIMENSIONS
-        # ==========================
 
         height, width, _ = frame.shape
 
-        # ==========================
+        # =====================================
         # SEGMENTATION MASK
-        # ==========================
+        # =====================================
 
-        segmentation_mask = segmentation_results.segmentation_mask
+        segmentation_mask = (
+            segmentation_results.segmentation_mask
+        )
 
         condition = segmentation_mask > 0.5
 
@@ -241,23 +277,25 @@ class PoseDetector:
 
         binary_mask[condition] = 255
 
-        # ==========================
+        # =====================================
         # LANDMARK STORAGE
-        # ==========================
+        # =====================================
 
         landmarks = {}
 
-        # ==========================
-        # WIDTH VARIABLES
-        # ==========================
+        # =====================================
+        # BODY VARIABLES
+        # =====================================
 
         shoulder_width = None
         waist_width = None
         body_ratio = None
+        body_type = "Unknown"
+        confidence = 0
 
-        # ==========================
+        # =====================================
         # EXTRACT LANDMARKS
-        # ==========================
+        # =====================================
 
         if pose_results.pose_landmarks:
 
@@ -269,7 +307,9 @@ class PoseDetector:
 
             for name, idx in self.landmark_ids.items():
 
-                landmark = pose_results.pose_landmarks.landmark[idx]
+                landmark = (
+                    pose_results.pose_landmarks.landmark[idx]
+                )
 
                 x = int(landmark.x * width)
                 y = int(landmark.y * height)
@@ -280,7 +320,6 @@ class PoseDetector:
                     "visibility": landmark.visibility
                 }
 
-                # Draw points
                 cv2.circle(
                     output_frame,
                     (x, y),
@@ -289,69 +328,61 @@ class PoseDetector:
                     -1
                 )
 
-        # ==========================
+        # =====================================
         # VALIDATE POSE
-        # ==========================
+        # =====================================
 
         valid_pose = False
         validation_message = "No body detected"
 
         if landmarks:
-            valid_pose, validation_message = self.is_valid_pose(
-                landmarks
+
+            valid_pose, validation_message = (
+                self.is_valid_pose(landmarks)
             )
 
-        # ==========================
+        # =====================================
         # WIDTH EXTRACTION
-        # ==========================
+        # =====================================
 
         if valid_pose:
 
-            # --------------------------
-            # SHOULDER Y
-            # --------------------------
-
-            left_shoulder_y = landmarks["LEFT_SHOULDER"]["y"]
-            right_shoulder_y = landmarks["RIGHT_SHOULDER"]["y"]
+            # =====================================
+            # SHOULDER HEIGHT
+            # =====================================
 
             shoulder_y = int(
                 (
-                    left_shoulder_y +
-                    right_shoulder_y
+                    landmarks["LEFT_SHOULDER"]["y"] +
+                    landmarks["RIGHT_SHOULDER"]["y"]
                 ) / 2
             )
 
-            # Move downward slightly
             shoulder_y += 20
 
-            # --------------------------
-            # HIP Y
-            # --------------------------
-
-            left_hip_y = landmarks["LEFT_HIP"]["y"]
-            right_hip_y = landmarks["RIGHT_HIP"]["y"]
+            # =====================================
+            # HIP HEIGHT
+            # =====================================
 
             hip_y = int(
                 (
-                    left_hip_y +
-                    right_hip_y
+                    landmarks["LEFT_HIP"]["y"] +
+                    landmarks["RIGHT_HIP"]["y"]
                 ) / 2
             )
 
-            # --------------------------
-            # WAIST Y
-            # --------------------------
+            # =====================================
+            # WAIST HEIGHT
+            # =====================================
 
             waist_y = int(
-                (
-                    shoulder_y +
-                    hip_y
-                ) / 2
+                shoulder_y +
+                ((hip_y - shoulder_y) * 0.35)
             )
 
-            # ==========================
-            # SHOULDER WIDTH
-            # ==========================
+            # =====================================
+            # BODY CENTER
+            # =====================================
 
             center_x = int(
                 (
@@ -360,24 +391,33 @@ class PoseDetector:
                 ) / 2
             )
 
-            s_left, s_right, shoulder_width = self.get_body_width(
-                binary_mask,
-                shoulder_y,
-                center_x
+            # =====================================
+            # SHOULDER WIDTH
+            # =====================================
+
+            s_left, s_right, shoulder_width = (
+                self.get_body_width(
+                    binary_mask,
+                    shoulder_y,
+                    center_x
+                )
             )
 
-            # ==========================
+            # =====================================
             # WAIST WIDTH
-            # ==========================
+            # =====================================
 
-            w_left, w_right, waist_width = self.get_body_width(
-                binary_mask,
-                waist_y,
-                center_x
+            w_left, w_right, waist_width = (
+                self.get_body_width(
+                    binary_mask,
+                    waist_y,
+                    center_x
+                )
             )
-            # ==========================
+
+            # =====================================
             # DRAW SHOULDER LINE
-            # ==========================
+            # =====================================
 
             if shoulder_width is not None:
 
@@ -389,19 +429,9 @@ class PoseDetector:
                     3
                 )
 
-                cv2.putText(
-                    output_frame,
-                    f"Shoulder Width: {shoulder_width}",
-                    (20, 140),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 255, 255),
-                    2
-                )
-
-            # ==========================
+            # =====================================
             # DRAW WAIST LINE
-            # ==========================
+            # =====================================
 
             if waist_width is not None:
 
@@ -413,37 +443,23 @@ class PoseDetector:
                     3
                 )
 
-                cv2.putText(
-                    output_frame,
-                    f"Waist Width: {waist_width}",
-                    (20, 180),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (255, 0, 255),
-                    2
-                )
-
-            # ==========================
+            # =====================================
             # BODY RATIO
-            # ==========================
+            # =====================================
 
             if shoulder_width and waist_width:
 
-                body_ratio = shoulder_width / waist_width
-
-                cv2.putText(
-                    output_frame,
-                    f"Ratio: {body_ratio:.2f}",
-                    (20, 220),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    3
+                body_ratio = (
+                    shoulder_width / waist_width
                 )
 
-        # ==========================
-        # VALIDATION MESSAGE
-        # ==========================
+                body_type, confidence = (
+                    self.classify_body_type(body_ratio)
+                )
+
+        # =====================================
+        # DISPLAY OUTPUT
+        # =====================================
 
         color = (
             (0, 255, 0)
@@ -461,6 +477,38 @@ class PoseDetector:
             2
         )
 
+        if body_ratio:
+
+            cv2.putText(
+                output_frame,
+                f"Ratio: {body_ratio:.2f}",
+                (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255),
+                2
+            )
+
+            cv2.putText(
+                output_frame,
+                f"Body Type: {body_type}",
+                (20, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 0),
+                2
+            )
+
+            cv2.putText(
+                output_frame,
+                f"Confidence: {confidence}%",
+                (20, 200),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2
+            )
+
         return {
             "frame": output_frame,
             "mask": binary_mask,
@@ -469,5 +517,7 @@ class PoseDetector:
             "message": validation_message,
             "shoulder_width": shoulder_width,
             "waist_width": waist_width,
-            "body_ratio": body_ratio
+            "body_ratio": body_ratio,
+            "body_type": body_type,
+            "confidence": confidence
         }
