@@ -11,11 +11,11 @@ from src.pose_detector import PoseDetector
 # =====================================
 
 POSE_FOLDERS = {
-    "Oval": "poses/oval",
-    "Triangle": "poses/triangle",
-    "Rectangle": "poses/rectangle",
-    "Trapezium": "poses/trapezium",
-    "Inverted Triangle": "poses/inverted_triangle"
+    "Oval": "Poses/oval",
+    "Triangle": "Poses/triangle",
+    "Rectangle": "Poses/rectangle",
+    "Trapezium": "Poses/trapezium",
+    "Inverted Triangle": "Poses/inverted_triangle"
 }
 
 
