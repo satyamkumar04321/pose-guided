@@ -3,7 +3,11 @@ import cv2
 import numpy as np
 from PIL import Image
 import os
+import sys
 import glob
+
+# Ensure current directory is in sys.path for cloud imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.pose_detector import PoseDetector
 
